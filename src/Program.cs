@@ -1,4 +1,8 @@
-﻿using System;
+﻿/*
+    * Change extention: dotnet run -re '/Users/phantom/Documents/Projects/phantom.MVC.MuOnline/src/wwwroot/images/items/*.jpg' png
+*/
+
+using System;
 using System.Linq;
 
 class Program
