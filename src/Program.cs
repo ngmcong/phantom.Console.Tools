@@ -2,14 +2,112 @@
     * Change extention: dotnet run -re '/Users/phantom/Documents/Projects/phantom.MVC.MuOnline/src/wwwroot/images/items/*.jpg' png
 */
 
-using System;
 using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Google.Apis.Auth.OAuth2;
+using Google.Apis.Util.Store;
 
 class Program
 {
+    static readonly string[] Scopes = {
+        "email", // Request the user's email address
+        "profile", // Request basic profile information
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        // Add other scopes your app needs, e.g., for Google Drive, Sheets, etc.
+    };
+    static async Task ClearTokenAsync(string userId, string applicationName)
+    {
+        var fileDataStore = new FileDataStore(applicationName);
+        string folderPath = fileDataStore.FolderPath;
+        string searchPattern = $"Google.Apis.Auth.OAuth2.Responses.TokenResponse-{userId}*";
+
+        if (Directory.Exists(folderPath))
+        {
+            Console.WriteLine($"Token storage folder found: {folderPath}");
+            string[] filesToDelete = Directory.GetFiles(folderPath, searchPattern);
+            foreach (string file in filesToDelete)
+            {
+                try
+                {
+                    File.Delete(file);
+                    Console.WriteLine($"Deleted token file: {file}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error deleting {file}: {ex.Message}");
+                }
+            }
+        }
+        else
+        {
+            Console.WriteLine($"Token storage folder not found: {folderPath}");
+        }
+        // Optionally, you can clear all files in the store
+        await fileDataStore.ClearAsync();
+    }
+    public static async Task RevokeTokenAsync(UserCredential credential)
+    {
+        HttpClient _httpClient = new HttpClient();
+        if (credential?.Token?.AccessToken != null)
+        {
+            string accessToken = credential.Token.AccessToken;
+            string revokeEndpoint = "https://oauth2.googleapis.com/revoke";
+            var content = new StringContent($"token={accessToken}", System.Text.Encoding.UTF8, "application/x-www-form-urlencoded");
+
+            try
+            {
+                var response = await _httpClient.PostAsync(revokeEndpoint, content);
+                if (response.IsSuccessStatusCode)
+                {
+                    Console.WriteLine("Access token revoked successfully.");
+                }
+                else
+                {
+                    Console.WriteLine($"Failed to revoke access token. Status code: {response.StatusCode}");
+                    string error = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"Error details: {error}");
+                }
+            }
+            catch (HttpRequestException ex)
+            {
+                Console.WriteLine($"Error revoking access token: {ex.Message}");
+            }
+
+            // Optionally revoke the refresh token as well for more complete "logout"
+            if (credential.Token.RefreshToken != null)
+            {
+                var refreshContent = new StringContent($"token={credential.Token.RefreshToken}", System.Text.Encoding.UTF8, "application/x-www-form-urlencoded");
+                try
+                {
+                    var response = await _httpClient.PostAsync(revokeEndpoint, refreshContent);
+                    if (response.IsSuccessStatusCode)
+                    {
+                        Console.WriteLine("Refresh token revoked successfully.");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Failed to revoke refresh token. Status code: {response.StatusCode}");
+                        string error = await response.Content.ReadAsStringAsync();
+                        Console.WriteLine($"Error details: {error}");
+                    }
+                }
+                catch (HttpRequestException ex)
+                {
+                    Console.WriteLine($"Error revoking refresh token: {ex.Message}");
+                }
+            }
+        }
+        else
+        {
+            Console.WriteLine("No access token available to revoke.");
+        }
+    }
     static async Task Main(string[] args)
     {
         if (args.Any(x => x == "-re"))
@@ -35,13 +133,65 @@ class Program
         else if (args.Any(x => x == "-apc"))
         {
             var dirLocation = args[1];
+            if (Directory.Exists(dirLocation) == false)
+            {
+                Console.WriteLine($"Directory {dirLocation} not found");
+                return;
+            }
+
+            var azureToken = string.Empty;
+            HttpResponseMessage response;
+            // await ClearTokenAsync("ngmcong", "phantom.Console.Tools");
+            UserCredential credential;
+            await using (var stream = new FileStream("credentials.json", FileMode.Open, FileAccess.Read))
+            {
+                credential = await GoogleWebAuthorizationBroker.AuthorizeAsync(
+                    GoogleClientSecrets.FromStream(stream).Secrets,
+                    Scopes,
+                    "ngmcong",
+                    CancellationToken.None,
+                    new FileDataStore(System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData), true)
+                );
+                // await RevokeTokenAsync(credential);
+                if (credential != null && credential.Token != null)
+                {
+                    string accessToken = credential.Token.AccessToken;
+                    Console.WriteLine($"Bearer Token (Access Token): {accessToken}");
+                    // You can now use this accessToken in the Authorization header of your HTTP requests
+                    // For example:
+                    // client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+                    HttpClient httpClient = new HttpClient();
+                    httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+                    response = await httpClient.GetAsync("https://sheets.googleapis.com/v4/spreadsheets/1hS_38TjKFEu5dbY65zcaruMeASZ3KVqq1E5fpNOgpY4/values/A:B");
+                    if (response.IsSuccessStatusCode)
+                    {
+                        string responseContent = await response.Content.ReadAsStringAsync();
+                        Console.WriteLine($"responseContent: {responseContent.Substring(0, 200)}");
+                        var responseValue = JsonSerializer.Deserialize<GoogleSheetAPI>(responseContent);
+                        azureToken = responseValue?.values?.FirstOrDefault(x => x.First() == "Azure")?.ElementAt(1);
+                        Console.WriteLine($"azureToken: {azureToken}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Request failed with status code: {response.StatusCode}");
+                        string errorContent = await response.Content.ReadAsStringAsync();
+                        Console.WriteLine($"Error details: {errorContent}");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("Could not retrieve the access token.");
+                }
+            }
+
             Console.WriteLine(dirLocation);
             HttpClient client = new HttpClient();
             // Create the base64 encoded credentials
-            string credentials = Convert.ToBase64String(Encoding.ASCII.GetBytes($"ngmcong:"));
+            string credentials = Convert.ToBase64String(Encoding.ASCII.GetBytes($"ngmcong:{azureToken}"));
             // Set the Authorization header
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
-            var response = await client.GetAsync("https://dev.azure.com/ngmcong/InfomedHIS/_apis/git/repositories?api-version=7.1");
+            response = await client.GetAsync("https://dev.azure.com/ngmcong/InfomedHIS/_apis/git/repositories?api-version=7.1");
             // Check if the request was successful
             if (response.IsSuccessStatusCode)
             {
@@ -83,6 +233,10 @@ class Program
             }
         }
     }
+}
+public class GoogleSheetAPI
+{
+    public IEnumerable<IEnumerable<string>>? values { get; set; }
 }
 public class AzureRepositories
 {
