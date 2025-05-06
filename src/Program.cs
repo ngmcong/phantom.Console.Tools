@@ -232,6 +232,30 @@ class Program
                 Console.WriteLine($"Error details: {errorContent}");
             }
         }
+        //dotnet run -rn "/Volumes/SSD" " | noname"
+        else if (args.Any(x => x == "-rn"))
+        {
+            var aParams = args.Skip(args.ToList().IndexOf("-rn") + 1).Take(3);
+            if (aParams.Count() < 2)
+            {
+                System.Console.WriteLine("Error: -rn requires three parameters.");
+                return;
+            }
+            var dir = aParams.ElementAt(0);
+            if (Directory.Exists(dir) == false)
+            {
+                System.Console.WriteLine($"Directory {dir} not found.");
+                return;
+            }
+            var org = aParams.ElementAt(1);
+            var rpc = aParams.Count() == 3 ? aParams.ElementAt(2) : "";
+            var files = System.IO.Directory.GetFiles(dir, "*.*");
+            foreach (string item in files)
+            {
+                if (File.Exists(item) == false) continue;
+                File.Move(item, item.Replace(org, rpc));
+            }
+        }
     }
 }
 public class GoogleSheetAPI
