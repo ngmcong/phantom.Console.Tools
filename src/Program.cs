@@ -4,9 +4,9 @@
 
 using System.Diagnostics;
 using System.Net.Http.Headers;
-using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Google.Apis.Auth.OAuth2;
 using Google.Apis.Util.Store;
 
@@ -247,25 +247,79 @@ class Program
             }
         }
         //Create docker image
-        //dotnet run -cdi "D:\Projects\InfomedHIS" "1.0"
+        //dotnet run -cdi "D:\Projects\InfomedHIS" "1.0" "9.0"
         else if (args.Any(x => x == "-cdi"))
         {
             var dirLocation = args[1];
             var version = args[2];
+            var netSdk = args[3];
             var directories = Directory.GetDirectories(dirLocation);
             var startPort = 8080;
             foreach (var dir in directories)
             {
                 if (dir.Contains(".API.") == false) continue;
-                if (File.Exists(Path.Combine(dir, "Dockerfile")) == false) continue;
+                var dockerFilePath = Path.Combine(dir, "Dockerfile");
+                if (File.Exists(dockerFilePath) == false) continue;
                 startPort++;
+                var projectFilePath = Directory.GetFiles(dir, "*.csproj").FirstOrDefault();
+                if (string.IsNullOrEmpty(netSdk) == false && string.IsNullOrEmpty(projectFilePath) == false)
+                {
+                    var fileContent = string.Empty;
+                    var netSdkString = string.Empty;
+                    var replaceNetSdkString = string.Empty;
+                    using (var file = new FileStream(projectFilePath, FileMode.Open, FileAccess.Read))
+                    using (var reader = new StreamReader(file))
+                    {
+                        fileContent = reader.ReadToEnd();
+                        netSdkString = (new Regex(@"<TargetFramework>([\d\w./]*)</TargetFramework>")).Matches(fileContent).First().Value;
+                        switch (netSdk)
+                        {
+                            case "9.0":
+                                replaceNetSdkString = "<TargetFramework>net9.0</TargetFramework>";
+                                break;
+                        }
+                    }
+                    if (replaceNetSdkString.Equals(netSdkString) == false)
+                    {
+                        using (var file = new FileStream(projectFilePath, FileMode.Create, FileAccess.ReadWrite))
+                        using (var writer = new StreamWriter(file))
+                        {
+                            writer.Write(fileContent.Replace(netSdkString, replaceNetSdkString));
+                        }
+                    }
+                }
+                if (string.IsNullOrEmpty(netSdk) == false)
+                {
+                    var fileContent = string.Empty;
+                    var aspnetString = string.Empty;
+                    var sdkString = string.Empty;
+                    var replaceAspnetString = string.Empty;
+                    var replaceSdkString = string.Empty;
+                    using (var file = new FileStream(dockerFilePath, FileMode.Open, FileAccess.Read))
+                    using (var reader = new StreamReader(file))
+                    {
+                        fileContent = reader.ReadToEnd();
+                        aspnetString = (new Regex(@"mcr\.microsoft\.com/dotnet/aspnet:([\d\.]*)")).Matches(fileContent).First().Value;
+                        sdkString = (new Regex(@"mcr\.microsoft\.com/dotnet/sdk:([\d\.]*)")).Matches(fileContent).First().Value;
+                    }
+                    var currentVersion = aspnetString.Split(":").Last();
+                    if (currentVersion.Equals(netSdk) == false)
+                    {
+                        using (var file = new FileStream(dockerFilePath, FileMode.Create, FileAccess.ReadWrite))
+                        using (var writer = new StreamWriter(file))
+                        {
+                            writer.Write(fileContent.Replace(aspnetString, aspnetString.Replace(currentVersion, netSdk))
+                                .Replace(sdkString, sdkString.Replace(currentVersion, netSdk)));
+                        }
+                    }
+                }
                 var apiName = dir.Split(@"\").Last();
                 var filter = await RunCommandLine($"docker images --filter \"reference={apiName.ToLower()}:{version}\"", null);
                 if (filter.exitCode == 0 && filter.outputString.Split('\n').Count() == 3) goto dockerrun;
                 var retVal = await RunCommandLine($"docker build --network=host --build-arg NUGET_USER=ngmcong --build-arg NUGET_PASS=3cTMJtDH7gpfBmnvaLYldW9l307UBgB4F0ginuib6hjZOgg7D8Q6JQQJ99BCACAAAAAAAAAAAAASAZDO124W -t {apiName.ToLower()}:lastest -t {apiName.ToLower()}:{version} .", dir);
                 Console.WriteLine($"Docker build in {apiName} with exit code: {retVal.exitCode}");
                 if (retVal.exitCode != 0) break;
-            dockerrun:
+                dockerrun:
                 filter = await RunCommandLine($"docker ps -a --filter \"name={apiName}\"", null);
                 if (filter.exitCode == 0 && filter.outputString.Split('\n').Count() == 3) continue;
                 retVal = await RunCommandLine($"docker run -d -p {startPort}:80 --name {apiName} {apiName.ToLower()}:lastest", dir);
