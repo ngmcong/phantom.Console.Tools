@@ -4,6 +4,7 @@
 
 using System.Diagnostics;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Google.Apis.Auth.OAuth2;
@@ -252,16 +253,23 @@ class Program
             var dirLocation = args[1];
             var version = args[2];
             var directories = Directory.GetDirectories(dirLocation);
+            var startPort = 8080;
             foreach (var dir in directories)
             {
                 if (dir.Contains(".API.") == false) continue;
                 if (File.Exists(Path.Combine(dir, "Dockerfile")) == false) continue;
-                var apiName = dir.Split(@"\").Last().ToLower();
-                var filter = await RunCommandLine($"docker images --filter \"reference={apiName}:{version}\"", null);
+                startPort++;
+                var apiName = dir.Split(@"\").Last();
+                var filter = await RunCommandLine($"docker images --filter \"reference={apiName.ToLower()}:{version}\"", null);
+                if (filter.exitCode == 0 && filter.outputString.Split('\n').Count() == 3) goto dockerrun;
+                var retVal = await RunCommandLine($"docker build --network=host --build-arg NUGET_USER=ngmcong --build-arg NUGET_PASS=3cTMJtDH7gpfBmnvaLYldW9l307UBgB4F0ginuib6hjZOgg7D8Q6JQQJ99BCACAAAAAAAAAAAAASAZDO124W -t {apiName.ToLower()}:lastest -t {apiName.ToLower()}:{version} .", dir);
+                Console.WriteLine($"Docker build in {apiName} with exit code: {retVal.exitCode}");
+                if (retVal.exitCode != 0) break;
+            dockerrun:
+                filter = await RunCommandLine($"docker ps -a --filter \"name={apiName}\"", null);
                 if (filter.exitCode == 0 && filter.outputString.Split('\n').Count() == 3) continue;
-                var retVal = await RunCommandLine($"docker build --network=host --build-arg NUGET_USER=ngmcong --build-arg NUGET_PASS=3cTMJtDH7gpfBmnvaLYldW9l307UBgB4F0ginuib6hjZOgg7D8Q6JQQJ99BCACAAAAAAAAAAAAASAZDO124W -t {apiName}:lastest -t {apiName}:{version} .", dir);
-                Console.WriteLine($"Docker build in {dir} with exit code: {retVal.exitCode}");
-                break;
+                retVal = await RunCommandLine($"docker run -d -p {startPort}:80 --name {apiName} {apiName.ToLower()}:lastest", dir);
+                Console.WriteLine($"Docker run in {apiName} with exit code: {retVal.exitCode}");
             }
         }
     }
