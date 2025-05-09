@@ -110,6 +110,7 @@ class Program
     }
     static async Task Main(string[] args)
     {
+        //Change file extention
         if (args.Any(x => x == "-re"))
         {
             var aParams = args.Skip(args.ToList().IndexOf("-re") + 1).Take(2);
@@ -129,6 +130,7 @@ class Program
                 File.Move(item, item.Replace(orgExt, $".{ext}"));
             }
         }
+        //Clone Azure repositories from project
         //dotnet run -apc "D:\Projects\InfomedHIS"
         else if (args.Any(x => x == "-apc"))
         {
@@ -208,21 +210,8 @@ class Program
                         continue;
                     }
                     var command = $"git clone {item.webUrl!}";
-                    Console.WriteLine(command);
-                    ProcessStartInfo psi = new ProcessStartInfo("cmd.exe");
-                    psi.WorkingDirectory = dirLocation;
-                    psi.Arguments = $"/c {command}";
-                    psi.UseShellExecute = false;
-                    psi.RedirectStandardOutput = true;
-                    psi.RedirectStandardError = true; // Capture error output as well
-                    psi.CreateNoWindow = true;       // Optional: Hide the cmd window
-                    var process = new Process()!;
-                    process.StartInfo = psi;
-                    process.Start();
-                    string error = await process.StandardError.ReadToEndAsync();
-                    await process.WaitForExitAsync();
-                    Console.WriteLine($"{error}");
-                    Console.WriteLine($"Git clone {item.name!} with exit code: {process.ExitCode}");
+                    var retVal = await RunCommandLine(command, dirLocation);
+                    Console.WriteLine($"Git clone {item.name!} with exit code: {retVal.exitCode}");
                 }
             }
             else
@@ -256,6 +245,50 @@ class Program
                 File.Move(item, item.Replace(org, rpc));
             }
         }
+        //Create docker image
+        //dotnet run -cdi "D:\Projects\InfomedHIS" "1.0"
+        else if (args.Any(x => x == "-cdi"))
+        {
+            var dirLocation = args[1];
+            var version = args[2];
+            var directories = Directory.GetDirectories(dirLocation);
+            foreach (var dir in directories)
+            {
+                if (dir.Contains(".API.") == false) continue;
+                if (File.Exists(Path.Combine(dir, "Dockerfile")) == false) continue;
+                var apiName = dir.Split(@"\").Last().ToLower();
+                var filter = await RunCommandLine($"docker images --filter \"reference={apiName}:{version}\"", null);
+                if (filter.exitCode == 0 && filter.outputString.Split('\n').Count() == 3) continue;
+                var retVal = await RunCommandLine($"docker build --network=host --build-arg NUGET_USER=ngmcong --build-arg NUGET_PASS=3cTMJtDH7gpfBmnvaLYldW9l307UBgB4F0ginuib6hjZOgg7D8Q6JQQJ99BCACAAAAAAAAAAAAASAZDO124W -t {apiName}:lastest -t {apiName}:{version} .", dir);
+                Console.WriteLine($"Docker build in {dir} with exit code: {retVal.exitCode}");
+                break;
+            }
+        }
+    }
+    private static async Task<(string errorString, string outputString, int exitCode)> RunCommandLine(string command
+        , string? workingDirectory)
+    {
+        Console.WriteLine(command);
+        ProcessStartInfo psi = new ProcessStartInfo("cmd.exe");
+        if (string.IsNullOrEmpty(workingDirectory) == false) psi.WorkingDirectory = workingDirectory;
+        psi.Arguments = $"/c {command}";
+        psi.UseShellExecute = false;
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true; // Capture error output as well
+        psi.CreateNoWindow = true;       // Optional: Hide the cmd window
+        var process = new Process()!;
+        process.StartInfo = psi;
+        string errorString = string.Empty;
+        process.ErrorDataReceived += (s, e) =>
+        {
+            Console.WriteLine(e.Data);
+            errorString += e.Data;
+        };
+        process.Start();
+        process.BeginErrorReadLine();
+        string outputString = await process.StandardOutput.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        return (errorString, outputString, process.ExitCode);
     }
 }
 public class GoogleSheetAPI
