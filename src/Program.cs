@@ -314,35 +314,44 @@ class Program
                     }
                 }
                 var apiName = dir.Split(@"\").Last();
-                var filter = await RunCommandLine($"docker images --filter \"reference={apiName.ToLower()}:{version}\"", null);
-                if (filter.exitCode == 0 && filter.outputString.Split('\n').Count() == 3) goto dockerrun;
+                var filter = await RunCommandLine($"docker images --filter \"reference={apiName.ToLower()}:{version}\"");
+                if (filter.exitCode == 0 && filter.outputString.Split('\n').Count() == 2) goto dockercreate;
                 var retVal = await RunCommandLine($"docker build --network=host --build-arg NUGET_USER=ngmcong --build-arg NUGET_PASS=3cTMJtDH7gpfBmnvaLYldW9l307UBgB4F0ginuib6hjZOgg7D8Q6JQQJ99BCACAAAAAAAAAAAAASAZDO124W -t {apiName.ToLower()}:lastest -t {apiName.ToLower()}:{version} .", dir);
                 Console.WriteLine($"Docker build in {apiName} with exit code: {retVal.exitCode}");
                 if (retVal.exitCode != 0) break;
-                dockerrun:
-                filter = await RunCommandLine($"docker ps -a --filter \"name={apiName}\"", null);
-                if (filter.exitCode == 0 && filter.outputString.Split('\n').Count() == 3) continue;
-                retVal = await RunCommandLine($"docker run -d -p {startPort}:80 --name {apiName} {apiName.ToLower()}:lastest", dir);
+                dockercreate:
+                filter = await RunCommandLine($"docker ps -a --filter \"name={apiName}\"");
+                if (filter.exitCode == 0 && filter.outputString.Split('\n').Count() == 2) goto dockerrun;
+                retVal = await RunCommandLine($"docker container create -p {startPort}:80 --name {apiName} {apiName.ToLower()}:lastest");
+                Console.WriteLine($"Docker create in {apiName} with exit code: {retVal.exitCode}");
+            dockerrun:
+                filter = await RunCommandLine($"docker ps --filter \"name={apiName}\"");
+                if (filter.exitCode == 0 && filter.outputString.Split('\n').Count() == 2) continue;
+                retVal = await RunCommandLine($"docker container start {apiName}");
                 Console.WriteLine($"Docker run in {apiName} with exit code: {retVal.exitCode}");
             }
         }
     }
     private static async Task<(string errorString, string outputString, int exitCode)> RunCommandLine(string command
-        , string? workingDirectory)
+        , string? workingDirectory = null)
     {
-        Console.WriteLine(command);
-        ProcessStartInfo psi = new ProcessStartInfo("cmd.exe");
+        //Console.WriteLine(command);
+        ProcessStartInfo psi = new ProcessStartInfo("cmd.exe")
+        {
+            Arguments = $"/c {command}",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true, // Capture error output as well
+            CreateNoWindow = true,       // Optional: Hide the cmd window
+            StandardOutputEncoding = Encoding.UTF8,
+        };
         if (string.IsNullOrEmpty(workingDirectory) == false) psi.WorkingDirectory = workingDirectory;
-        psi.Arguments = $"/c {command}";
-        psi.UseShellExecute = false;
-        psi.RedirectStandardOutput = true;
-        psi.RedirectStandardError = true; // Capture error output as well
-        psi.CreateNoWindow = true;       // Optional: Hide the cmd window
         var process = new Process()!;
         process.StartInfo = psi;
         string errorString = string.Empty;
         process.ErrorDataReceived += (s, e) =>
         {
+            if (string.IsNullOrEmpty(e.Data)) return;
             Console.WriteLine(e.Data);
             errorString += e.Data;
         };
@@ -350,7 +359,7 @@ class Program
         process.BeginErrorReadLine();
         string outputString = await process.StandardOutput.ReadToEndAsync();
         await process.WaitForExitAsync();
-        return (errorString, outputString, process.ExitCode);
+        return (errorString, outputString.Trim(), process.ExitCode);
     }
 }
 public class GoogleSheetAPI
